@@ -1,0 +1,214 @@
+# ------------------------------------------------------------------------------
+# Agibank Credit Risk MLOps Pipeline - CI/CD
+#
+# Triggers: push to main, pull requests targeting main.
+#
+# Jobs:
+#   1. lint                 - R syntax parsing, shell syntax, JSON schema sanity
+#   2. build-and-train      - docker build + in-container training + artifact check
+#   3. integration-tests    - serve the API in a container, health-check, run the
+#                             testthat suite and curl smoke tests
+#   4. docker-tagging       - generate commit SHA / latest / date tags and
+#                             simulate a registry push
+# ------------------------------------------------------------------------------
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: agibank-mlops
+  R_IMAGE: rocker/r-ver:4.3.2
+  API_PORT: 8080
+
+jobs:
+  lint:
+    name: Lint & code analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: R syntax check (parse all R scripts)
+        run: |
+          docker run --rm -v "$PWD":/workspace -w /workspace "${{ env.R_IMAGE }}" \
+            Rscript -e '
+              files <- list.files(".", pattern = "[.]R$", recursive = TRUE)
+              failed <- character(0)
+              for (f in files) {
+                ok <- tryCatch({ parse(f); TRUE },
+                               error = function(e) {
+                                 cat(sprintf("[FAIL] %s: %s\n", f, conditionMessage(e)))
+                                 FALSE
+                               })
+                if (!ok) failed <- c(failed, f) else cat(sprintf("[OK]   %s\n", f))
+              }
+              if (length(failed) > 0) {
+                cat(sprintf("Syntax errors in %d file(s)\n", length(failed)))
+                quit(status = 1)
+              }
+              cat(sprintf("Parsed %d R script(s) successfully\n", length(files)))
+            '
+
+      - name: Shell script syntax check
+        run: bash -n entrypoint.sh
+
+      - name: Validate metadata.json schema
+        run: |
+          python3 - <<'EOF'
+          import json
+          with open("src/features/metadata.json") as fh:
+              meta = json.load(fh)
+          assert meta["schema_version"] == "1.0.0", "schema_version mismatch"
+          assert meta["model_version"], "model_version missing"
+          required = [f for f in meta["features"] if f.get("required")]
+          assert len(required) >= 7, "expected at least 7 required features"
+          assert meta["thresholds"]["high_risk_cutoff"] > 0.0, "invalid threshold"
+          assert all(f["name"] in {r["name"] for r in required} for f in meta["features"])
+          print(f"metadata.json valid: schema {meta['schema_version']}, "
+                f"{len(required)} required features")
+          EOF
+
+  build-and-train:
+    name: Docker build & model training
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t "${{ env.IMAGE_NAME }}:test" .
+
+      - name: Run model training inside the container
+        run: |
+          docker run --rm \
+            -v "$PWD/models:/app/models" \
+            -v "$PWD/data:/app/data" \
+            "${{ env.IMAGE_NAME }}:test" train
+
+      - name: Verify model artifact exists and is non-empty
+        run: |
+          test -s models/model_v1.rds || {
+            echo "::error::models/model_v1.rds is missing or empty"
+            exit 1
+          }
+          echo "model_v1.rds OK ($(stat -c%s models/model_v1.rds) bytes)"
+
+  integration-tests:
+    name: API integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t "${{ env.IMAGE_NAME }}:test" .
+
+      - name: Train the model (required by the API container)
+        run: |
+          docker run --rm \
+            -v "$PWD/models:/app/models" \
+            -v "$PWD/data:/app/data" \
+            "${{ env.IMAGE_NAME }}:test" train
+
+      - name: Start API container in background
+        run: |
+          docker run -d \
+            --name api-test \
+            -p "${{ env.API_PORT }}:${{ env.API_PORT }}" \
+            -e PORT=${{ env.API_PORT }} \
+            -v "$PWD/models:/app/models" \
+            "${{ env.IMAGE_NAME }}:test" serve
+
+      - name: Wait for API readiness
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf "http://localhost:${{ env.API_PORT }}/health" > /dev/null; then
+              echo "API is ready after ${i} attempts"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::API did not become ready" >&2
+          docker logs api-test || true
+          exit 1
+
+      - name: Run integration test suite (testthat)
+        run: |
+          docker exec api-test Rscript -e \
+            "testthat::test_file('tests/test_api.R', reporter = 'summary')"
+
+      - name: curl smoke tests
+        run: |
+          echo "--- GET /health ---"
+          curl -sf "http://localhost:${{ env.API_PORT }}/health" | python3 -m json.tool
+          echo "--- GET /model-info ---"
+          curl -sf "http://localhost:${{ env.API_PORT }}/model-info" | python3 -m json.tool > /dev/null && echo OK
+          echo "--- POST /predict ---"
+          curl -sf -X POST "http://localhost:${{ env.API_PORT }}/predict" \
+            -H "Content-Type: application/json" \
+            -d '{"AMT_INCOME_TOTAL":150000,"AMT_CREDIT":450000,"AMT_ANNUITY":25000,"DAYS_BIRTH":-12000,"DAYS_EMPLOYED":-2000,"EXT_SOURCE_2":0.55,"EXT_SOURCE_3":0.42}' \
+            | python3 -m json.tool
+
+      - name: Verify 400 response on invalid payload
+        run: |
+          code=$(curl -s -o /tmp/bad.json -w "%{http_code}" \
+            -X POST "http://localhost:${{ env.API_PORT }}/predict" \
+            -H "Content-Type: application/json" \
+            -d '{"AMT_INCOME_TOTAL":150000}')
+          [ "$code" = "400" ] || { echo "::error::expected 400, got $code"; cat /tmp/bad.json; exit 1; }
+          echo "Bad payload correctly rejected (HTTP 400):"
+          cat /tmp/bad.json
+          echo
+
+      - name: Stop API container
+        if: always()
+        run: docker rm -f api-test || true
+
+  docker-tagging:
+    name: Docker image tagging (simulated registry push)
+    needs: [build-and-train, integration-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t "${{ env.IMAGE_NAME }}:latest" .
+
+      - name: Generate tags (commit SHA, short SHA, date)
+        run: |
+          IMAGE="${{ env.IMAGE_NAME }}"
+          SHORT_SHA="$(echo "${GITHUB_SHA}" | cut -c1-7)"
+          DATE_TAG="$(date +%Y%m%d%H%M%S)"
+          docker tag "$IMAGE:latest" "$IMAGE:$GITHUB_SHA"
+          docker tag "$IMAGE:latest" "$IMAGE:$SHORT_SHA"
+          docker tag "$IMAGE:latest" "$IMAGE:$DATE_TAG"
+          {
+            echo "### Docker tags generated"
+            echo ""
+            echo '```text'
+            docker images --format "{{.Repository}}:{{.Tag}}  {{.Size}}" | grep "^$IMAGE" || docker images | grep "$IMAGE"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Simulate registry push
+        run: |
+          echo "Simulating push of ${{ env.IMAGE_NAME }}:$GITHUB_SHA to registry..."
+          echo "Simulating push of ${{ env.IMAGE_NAME }}:latest to registry..."
+          echo "Image tags ready for production deployment:"
+          docker images --format "{{.Repository}}:{{.Tag}}  ({{.Size}})" | grep "^${{ env.IMAGE_NAME }}" || docker images | grep "${{ env.IMAGE_NAME }}"

@@ -1,0 +1,44 @@
+# ------------------------------------------------------------------------------
+# docker-compose.yml - orchestration for training and serving the API.
+#
+#   docker compose up --build train   # train the model (generates model_v1.rds)
+#   docker compose up --build api     # start the API on http://localhost:8080
+#
+# Volumes are bind-mounted so artifacts produced inside the containers land in
+# the host repository (models/, data/).
+# ------------------------------------------------------------------------------
+
+services:
+  train:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: train
+    environment:
+      DATA_PATH: data/sample_credit_data.csv
+      MODEL_OUTPUT_PATH: models/model_v1.rds
+      METADATA_PATH: src/features/metadata.json
+      LOG_LEVEL: INFO
+      NUM_TREES: "300"
+    volumes:
+      - ./models:/app/models
+      - ./data:/app/data
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: serve
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      HOST: 0.0.0.0
+      MODEL_OUTPUT_PATH: models/model_v1.rds
+      METADATA_PATH: src/features/metadata.json
+      LOG_LEVEL: INFO
+    volumes:
+      - ./models:/app/models
+    depends_on:
+      train:
+        condition: service_completed_successfully

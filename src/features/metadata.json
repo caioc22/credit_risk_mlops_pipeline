@@ -1,0 +1,63 @@
+{
+  "schema_version": "1.0.0",
+  "model_version": "v1.0.0",
+  "target": {
+    "name": "TARGET",
+    "type": "binary",
+    "description": "0 = Repaid, 1 = Defaulted"
+  },
+  "features": [
+    {
+      "name": "AMT_INCOME_TOTAL",
+      "type": "numeric",
+      "required": true,
+      "description": "Total annual income of the client",
+      "sample_value": 150000.0
+    },
+    {
+      "name": "AMT_CREDIT",
+      "type": "numeric",
+      "required": true,
+      "description": "Credit amount of the loan",
+      "sample_value": 450000.0
+    },
+    {
+      "name": "AMT_ANNUITY",
+      "type": "numeric",
+      "required": true,
+      "description": "Loan annuity payment",
+      "sample_value": 25000.0
+    },
+    {
+      "name": "DAYS_BIRTH",
+      "type": "numeric",
+      "required": true,
+      "description": "Client's age in days at application (negative value)",
+      "sample_value": -12000
+    },
+    {
+      "name": "DAYS_EMPLOYED",
+      "type": "numeric",
+      "required": true,
+      "description": "Days employed relative to application (negative value)",
+      "sample_value": -2000
+    },
+    {
+      "name": "EXT_SOURCE_2",
+      "type": "numeric",
+      "required": true,
+      "description": "Normalized score from external data source 2",
+      "sample_value": 0.55
+    },
+    {
+      "name": "EXT_SOURCE_3",
+      "type": "numeric",
+      "required": true,
+      "description": "Normalized score from external data source 3",
+      "sample_value": 0.42
+    }
+  ],
+  "thresholds": {
+    "high_risk_cutoff": 0.5
+  }
+}

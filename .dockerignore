@@ -1,0 +1,6 @@
+.git
+.github
+*.md
+models/*.rds
+*.log
+.DS_Store
