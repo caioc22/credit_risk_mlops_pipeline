@@ -43,8 +43,8 @@ resolve_path <- function(p) {
   if (is.null(p) || !nzchar(p) || grepl("^/", p)) p else file.path(PROJECT_ROOT, p)
 }
 
-MODEL_OUTPUT_PATH <- Sys.getenv("MODEL_OUTPUT_PATH", "models/model_v1.rds")
-METADATA_PATH     <- Sys.getenv("METADATA_PATH", "data/features_metadata.json")
+MODEL_OUTPUT_PATH <- resolve_path(Sys.getenv("MODEL_OUTPUT_PATH", "models/model_v1.rds"))
+METADATA_PATH     <- resolve_path(Sys.getenv("METADATA_PATH", "data/features_metadata.json"))
 LOG_LEVEL <- toupper(Sys.getenv("LOG_LEVEL", "INFO"))
 
 # --- Structured JSON logging --------------------------------------------------
@@ -121,10 +121,126 @@ FEATURE_NAMES <- MODEL$features %||% {
 }
 FEATURE_NAMES <- as.character(FEATURE_NAMES)
 
+# External credit source fields (EXT_SOURCE_1, EXT_SOURCE_2, EXT_SOURCE_3) are
+# NOT required by the API. When the client supplies one of them, its value is
+# fed to the model together with the required features. When the client omits
+# it, the API falls back to the average value of that field computed over the
+# training feature store when possible (and to 0.0 otherwise).
+OPTIONAL_REQUEST_FIELDS <- c("EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3")
+
+# Each optional request field maps to the model features it can consume. The
+# legacy EXT_SOURCE_2/EXT_SOURCE_3 columns were renamed to
+# THIRD_PARTY_CREDIT_SCORE_2/THIRD_PARTY_CREDIT_SCORE_3 in the trained model
+# contract, so both names are candidates depending on the model artifact.
+EXT_SOURCE_MODEL_ALIASES <- list(
+  EXT_SOURCE_1 = c("EXT_SOURCE_1"),
+  EXT_SOURCE_2 = c("THIRD_PARTY_CREDIT_SCORE_2", "EXT_SOURCE_2"),
+  EXT_SOURCE_3 = c("THIRD_PARTY_CREDIT_SCORE_3", "EXT_SOURCE_3")
+)
+
+# Request field -> model feature(s) it actually feeds (only those the trained
+# model really contains). Model features -> request fields is derived below.
+REQUEST_TO_MODEL_FEATURES <- list()
+OPTIONAL_MODEL_FEATURES <- character(0)
+for (req_field in OPTIONAL_REQUEST_FIELDS) {
+  present <- EXT_SOURCE_MODEL_ALIASES[[req_field]]
+  present <- present[present %in% FEATURE_NAMES]
+  REQUEST_TO_MODEL_FEATURES[[req_field]] <- present
+  OPTIONAL_MODEL_FEATURES <- unique(c(OPTIONAL_MODEL_FEATURES, present))
+}
+OPTIONAL_MODEL_FEATURES <- as.character(OPTIONAL_MODEL_FEATURES)
+
+MODEL_FEATURE_REQUEST_FIELDS <- setNames(vector("list", length(FEATURE_NAMES)), FEATURE_NAMES)
+for (req_field in names(REQUEST_TO_MODEL_FEATURES)) {
+  for (mf in REQUEST_TO_MODEL_FEATURES[[req_field]]) {
+    MODEL_FEATURE_REQUEST_FIELDS[[mf]] <- c(MODEL_FEATURE_REQUEST_FIELDS[[mf]], req_field)
+  }
+}
+
+# Only these model fields are mandatory in the payload; the external credit
+# source fields are excluded from the required set.
+REQUIRED_MODEL_FEATURES <- setdiff(FEATURE_NAMES, OPTIONAL_MODEL_FEATURES)
+RECOGNIZED_INPUT_FIELDS <- unique(c(FEATURE_NAMES, OPTIONAL_REQUEST_FIELDS))
+
 # Feature specs from the schema file, keyed by name, used for type checks.
 FEATURE_SPECS <- list()
 if (!is.null(METADATA$features)) {
   for (spec in METADATA$features) FEATURE_SPECS[[spec$name]] <- spec$type %||% "numeric"
+}
+
+FEATURE_STORE_PATH <- resolve_path(Sys.getenv("FEATURE_STORE_PATH", "data/feature_store.rds"))
+FEATURE_DEFAULTS <- NULL
+
+load_feature_defaults <- function() {
+  if (!is.null(FEATURE_DEFAULTS)) return(FEATURE_DEFAULTS)
+
+  defaults <- list()
+
+  if (!is.null(METADATA$features)) {
+    for (spec in METADATA$features) {
+      if (!is.null(spec$imputed_default)) {
+        defaults[[spec$name]] <- spec$imputed_default
+      }
+    }
+  }
+
+  if (!is.null(MODEL$imputation_map)) {
+    for (fname in names(MODEL$imputation_map)) {
+      defaults[[fname]] <- MODEL$imputation_map[[fname]]
+    }
+  }
+
+  if (file.exists(FEATURE_STORE_PATH)) {
+    feature_store <- tryCatch(
+      readRDS(FEATURE_STORE_PATH),
+      error = function(e) {
+        log_at("WARN", paste("Failed to load feature store defaults:", conditionMessage(e)))
+        NULL
+      }
+    )
+
+    if (!is.null(feature_store) && is.data.frame(feature_store)) {
+      store_defaults <- c(
+        "EXT_SOURCE_1",
+        "EXT_SOURCE_2",
+        "EXT_SOURCE_3",
+        FEATURE_NAMES
+      )
+      for (fname in unique(store_defaults)) {
+        if (fname %in% names(feature_store) && is.numeric(feature_store[[fname]])) {
+          defaults[[fname]] <- mean(feature_store[[fname]], na.rm = TRUE)
+        }
+      }
+    }
+  }
+
+  if ("EXT_SOURCE_2" %in% names(defaults) && "THIRD_PARTY_CREDIT_SCORE_2" %in% FEATURE_NAMES) {
+    defaults[["THIRD_PARTY_CREDIT_SCORE_2"]] <- defaults[["EXT_SOURCE_2"]]
+  }
+  if ("EXT_SOURCE_3" %in% names(defaults) && "THIRD_PARTY_CREDIT_SCORE_3" %in% FEATURE_NAMES) {
+    defaults[["THIRD_PARTY_CREDIT_SCORE_3"]] <- defaults[["EXT_SOURCE_3"]]
+  }
+
+  FEATURE_DEFAULTS <<- defaults
+  FEATURE_DEFAULTS
+}
+
+resolve_feature_default <- function(feature_name) {
+  defaults <- load_feature_defaults()
+  default_value <- defaults[[feature_name]] %||% NULL
+  if (!is.null(default_value) && length(default_value) == 1 && !is.na(default_value)) {
+    return(default_value)
+  }
+  if (feature_name %in% c("THIRD_PARTY_CREDIT_SCORE_2", "EXT_SOURCE_2")) {
+    return(0.0)
+  }
+  if (feature_name %in% c("THIRD_PARTY_CREDIT_SCORE_3", "EXT_SOURCE_3")) {
+    return(0.0)
+  }
+  if (feature_name == "EXT_SOURCE_1") {
+    return(0.0)
+  }
+  0.0
 }
 
 RISK_CUTOFF   <- METADATA$thresholds$high_risk_cutoff %||% 0.5
@@ -135,13 +251,12 @@ EXAMPLE_BODY <- local({
   example_defaults <- list(
     AMT_INCOME_TOTAL = 150000.0, AMT_CREDIT = 450000.0,
     AMT_ANNUITY = 25000.0, DAYS_BIRTH = -12000,
-    DAYS_EMPLOYED = -2000, EXT_SOURCE_2 = 0.55,
-    EXT_SOURCE_3 = 0.42
+    DAYS_EMPLOYED = -2000
   )
   out <- list()
   for (fname in FEATURE_NAMES) {
     out[[fname]] <- example_defaults[[fname]] %||%
-      if ((FEATURE_SPECS[[fname]] %||% "numeric") == "numeric") 0.0 else "value"
+      resolve_feature_default(fname)
   }
   out
 })
@@ -172,12 +287,63 @@ error_payload <- function(error_code, message, include_example = FALSE) {
   payload
 }
 
+normalize_record <- function(record) {
+  canonical <- list()
+
+  for (fname in FEATURE_NAMES) {
+    candidates <- c(fname, MODEL_FEATURE_REQUEST_FIELDS[[fname]])
+    present <- candidates[candidates %in% names(record)]
+
+    if (length(present) > 0 && !is.null(record[[present[1]]])) {
+      # Use the value the client actually provided.
+      canonical[[fname]] <- record[[present[1]]]
+    } else if (fname %in% OPTIONAL_MODEL_FEATURES) {
+      # Optional external credit source omitted: fall back to the average
+      # value from training when possible.
+      canonical[[fname]] <- resolve_feature_default(fname)
+    } else {
+      canonical[[fname]] <- NULL
+    }
+  }
+
+  canonical
+}
+
 new_prediction_id <- function() {
   paste0("req-", paste(sample(c(as.character(0:9), letters[1:6]), 8, replace = TRUE), collapse = ""))
 }
 
 risk_label <- function(probability) {
   if (probability >= RISK_CUTOFF) "HIGH_RISK" else "LOW_RISK"
+}
+
+# Validates a single feature value against the expected type.
+# Returns a character vector of problems (empty vector when the value is valid).
+validate_feature_value <- function(fname, value) {
+  expected_type <- FEATURE_SPECS[[fname]] %||% "numeric"
+
+  if (length(value) != 1 || is.list(value)) {
+    return(paste0("Field '", fname, "' must be a single value"))
+  }
+
+  if (expected_type %in% c("categorical", "string", "text")) {
+    if (!is.character(value)) {
+      return(paste0(
+        "Field '", fname, "' must be a character value, got: ",
+        paste(deparse(value), collapse = "")
+      ))
+    }
+    return(character(0))
+  }
+
+  if (!is.numeric(value) || is.na(value) || is.infinite(value)) {
+    return(paste0(
+      "Field '", fname, "' must be a finite numeric value, got: ",
+      paste(deparse(value), collapse = "")
+    ))
+  }
+
+  character(0)
 }
 
 # Validates a single record against the required features and their types.
@@ -189,34 +355,21 @@ validate_record <- function(record) {
     return("Request body must be a JSON object or an array of objects")
   }
 
-  for (fname in FEATURE_NAMES) {
-    if (!fname %in% names(record)) {
+  normalized <- normalize_record(record)
+
+  for (fname in REQUIRED_MODEL_FEATURES) {
+    if (is.null(normalized[[fname]])) {
       problems <- c(problems, paste0("Missing required field: ", fname))
       next
     }
+    problems <- c(problems, validate_feature_value(fname, normalized[[fname]]))
+  }
 
-    value <- record[[fname]]
-    expected_type <- FEATURE_SPECS[[fname]] %||% "numeric"
-
-    if (is.null(value)) {
-      problems <- c(problems, paste0("Field '", fname, "' must not be null"))
-      next
-    }
-    if (length(value) != 1 || is.list(value)) {
-      problems <- c(problems, paste0("Field '", fname, "' must be a single value"))
-      next
-    }
-
-    if (expected_type == "numeric" && (!is.numeric(value) || is.na(value) || is.infinite(value))) {
-      problems <- c(problems, paste0(
-        "Field '", fname, "' must be a finite numeric value, got: ",
-        paste(deparse(value), collapse = "")
-      ))
-    } else if (expected_type %in% c("categorical", "string", "text") && !is.character(value)) {
-      problems <- c(problems, paste0(
-        "Field '", fname, "' must be a character value, got: ",
-        paste(deparse(value), collapse = "")
-      ))
+  # Optional external credit source fields are never mandatory, but a value
+  # the client supplies must still be valid so it can feed the model.
+  for (req_field in OPTIONAL_REQUEST_FIELDS) {
+    if (req_field %in% names(record) && !is.null(record[[req_field]])) {
+      problems <- c(problems, validate_feature_value(req_field, record[[req_field]]))
     }
   }
 
@@ -225,7 +378,8 @@ validate_record <- function(record) {
 
 # Scores a validated record, returning the default probability.
 predict_record <- function(record) {
-  df <- as.data.frame(matrix(unlist(record[FEATURE_NAMES]), nrow = 1))
+  normalized <- normalize_record(record)
+  df <- as.data.frame(matrix(unlist(normalized[FEATURE_NAMES]), nrow = 1))
   names(df) <- FEATURE_NAMES
   for (col in FEATURE_NAMES) df[[col]] <- as.numeric(df[[col]])
 
@@ -285,11 +439,43 @@ function(res) {
 #* @tag system
 #* @response 200 Model information returned
 function() {
+  base_features <- METADATA$features %||% lapply(FEATURE_NAMES, function(f) list(name = f, type = "numeric", required = TRUE))
+  features <- lapply(base_features, function(f) {
+    if (!is.null(f$name) && f$name %in% OPTIONAL_MODEL_FEATURES) {
+      f$required <- FALSE
+    }
+    f
+  })
+
+  optional_features <- lapply(OPTIONAL_REQUEST_FIELDS, function(field_name) {
+    model_fields <- REQUEST_TO_MODEL_FEATURES[[field_name]]
+    description <- if (length(model_fields) > 0) {
+      paste0(
+        "Optional external credit source. When provided, its value feeds the model feature(s): ",
+        paste(model_fields, collapse = ", "),
+        ". When omitted, the API falls back to the average training value when available."
+      )
+    } else {
+      paste0(
+        "Optional external credit source accepted for compatibility; not part of the current ",
+        "trained model contract. When omitted, the API falls back to the average training value ",
+        "when available."
+      )
+    }
+    list(
+      name = field_name,
+      required = FALSE,
+      type = "numeric",
+      description = description
+    )
+  })
+
   list(
     model_version = MODEL_VERSION,
     schema_version = METADATA$schema_version %||% NA_character_,
     target = METADATA$target %||% list(name = "TARGET", type = "binary"),
-    features = METADATA$features %||% lapply(FEATURE_NAMES, function(f) list(name = f, type = "numeric", required = TRUE)),
+    features = features,
+    optional_features = optional_features,
     thresholds = METADATA$thresholds %||% list(high_risk_cutoff = RISK_CUTOFF),
     runtime = list(
       r_version = R.version.string,
@@ -306,8 +492,13 @@ function() {
 #* @serializer json list(auto_unbox = TRUE)
 #* @tag risk
 #* @param body:object Body containing the required credit risk features \
-#*   (AMT_INCOME_TOTAL, AMT_CREDIT, AMT_ANNUITY, DAYS_BIRTH, DAYS_EMPLOYED, \
-#*   EXT_SOURCE_2, EXT_SOURCE_3). Accepts a single object or an array of objects.
+#*   (AMT_INCOME_TOTAL, AMT_CREDIT, AMT_ANNUITY, DAYS_BIRTH, DAYS_EMPLOYED). \
+#*   External credit source fields EXT_SOURCE_1, EXT_SOURCE_2 and EXT_SOURCE_3 \
+#*   are NOT required: when provided they are fed to the model (EXT_SOURCE_2 and \
+#*   EXT_SOURCE_3 map to the trained features THIRD_PARTY_CREDIT_SCORE_2 and \
+#*   THIRD_PARTY_CREDIT_SCORE_3), and when omitted they are filled with the \
+#*   average training value for that field when available.
+#*   Accepts a single object or an array of objects.
 #* @response 200 Prediction returned
 #* @response 400 Validation failed
 #* @response 503 Model not loaded
@@ -336,7 +527,8 @@ function(req, res) {
           ". Common causes: trailing commas, unquoted keys, or missing fields."
         ),
         hint            = "Remove any trailing commas and ensure all keys are quoted strings.",
-        required_fields = FEATURE_NAMES,
+        required_fields = REQUIRED_MODEL_FEATURES,
+        optional_fields = OPTIONAL_REQUEST_FIELDS,
         example_body    = EXAMPLE_BODY,
         timestamp       = now_iso()
       ))
@@ -354,7 +546,8 @@ function(req, res) {
         return(list(
           error           = "InvalidJSON",
           message         = paste0("Invalid JSON payload: ", conditionMessage(e)),
-          required_fields = FEATURE_NAMES,
+          required_fields = REQUIRED_MODEL_FEATURES,
+          optional_fields = OPTIONAL_REQUEST_FIELDS,
           example_body    = EXAMPLE_BODY,
           timestamp       = now_iso()
         ))
@@ -379,7 +572,7 @@ function(req, res) {
   }
 
   # Single record vs batch of records.
-  is_single <- !is.null(names(body)) && any(names(body) %in% FEATURE_NAMES)
+  is_single <- !is.null(names(body)) && any(names(body) %in% RECOGNIZED_INPUT_FIELDS)
   records <- if (is_single) list(body) else body
   if (!is.list(records)) records <- list(records)
 
@@ -398,7 +591,8 @@ function(req, res) {
     return(list(
       error           = "ValidationFailed",
       message         = paste(details, collapse = " | "),
-      required_fields = FEATURE_NAMES,
+      required_fields = REQUIRED_MODEL_FEATURES,
+      optional_fields = OPTIONAL_REQUEST_FIELDS,
       example_body    = EXAMPLE_BODY,
       timestamp       = now_iso()
     ))
