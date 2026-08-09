@@ -91,11 +91,32 @@ jobs:
       - name: Build Docker image
         run: docker build -t "${{ env.IMAGE_NAME }}:test" .
 
+      - name: Generate mock training data
+        run: |
+          mkdir -p data models
+          docker run --rm \
+            -v "$PWD/data:/app/data" \
+            "${{ env.IMAGE_NAME }}:test" generate
+
+      - name: Verify mock data artifacts exist
+        run: |
+          test -s data/sample_credit_data.csv || {
+            echo "::error::data/sample_credit_data.csv is missing or empty"
+            exit 1
+          }
+          test -s data/feature_store.rds || {
+            echo "::error::data/feature_store.rds is missing or empty"
+            exit 1
+          }
+          echo "sample_credit_data.csv OK ($(stat -c%s data/sample_credit_data.csv) bytes)"
+          echo "feature_store.rds OK ($(stat -c%s data/feature_store.rds) bytes)"
+
       - name: Run model training inside the container
         run: |
           docker run --rm \
             -v "$PWD/models:/app/models" \
             -v "$PWD/data:/app/data" \
+            -e DATA_PATH=data/feature_store.rds \
             "${{ env.IMAGE_NAME }}:test" train
 
       - name: Verify model artifact exists and is non-empty
@@ -117,11 +138,19 @@ jobs:
       - name: Build Docker image
         run: docker build -t "${{ env.IMAGE_NAME }}:test" .
 
+      - name: Generate mock training data
+        run: |
+          mkdir -p data models
+          docker run --rm \
+            -v "$PWD/data:/app/data" \
+            "${{ env.IMAGE_NAME }}:test" generate
+
       - name: Train the model (required by the API container)
         run: |
           docker run --rm \
             -v "$PWD/models:/app/models" \
             -v "$PWD/data:/app/data" \
+            -e DATA_PATH=data/feature_store.rds \
             "${{ env.IMAGE_NAME }}:test" train
 
       - name: Start API container in background
