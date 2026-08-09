@@ -23,5 +23,6 @@ logs/
 *.zip
 
 # Data
-*.csv
-.codex
+data/*.rds
+data/*.csv
+data/*.zip

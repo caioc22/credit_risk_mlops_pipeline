@@ -106,13 +106,21 @@ No local R installation is required – everything runs inside the container.
 
 ## 4. Quickstart
 
-### 4.1 Build the Docker image
+### 4.1 Download the dataset
+
+To run and test de API **locally** :
+1. Login into Kaggle with your account to download the [Home Credit Default Risk](https://www.kaggle.com/competitions/home-credit-default-risk/data)
+2. Download the `.zip` file and place it on `data/` folder, so the feature store will be built upon it's data.
+
+For integration purposes, CI/CD tests are performed with **generated data** within the built container, since Kaggle requires authentication token to pull data online during runtime.
+
+### 4.2 Build the Docker image
 
 ```bash
 docker build -t agibank-mlops .
 ```
 
-### 4.2 Train the model
+### 4.3 Train the model
 
 ```bash
 # Recommended: persist artifacts back into the repository
@@ -139,7 +147,7 @@ Expected tail of the log output:
 {"timestamp":"2026-08-05T00:00:00Z","level":"INFO","logger":"train","message":"Model artifact saved","path":"models/model_v1.rds","version":"v1.0.0"}
 ```
 
-### 4.3 Start the API
+### 4.4 Start the API
 
 ```bash
 docker run --rm -d --name credit-api \
@@ -151,9 +159,11 @@ docker run --rm -d --name credit-api \
 curl -sf http://localhost:8080/health
 ```
 
-Swagger/OpenAPI docs: <http://localhost:8080/__docs__/>
+Access the Plumber Swagger/OpenAPI docs on <http://localhost:8080/__docs__/>
 
-### 4.4 Docker Compose (one-liner)
+### 4.5 Docker Compose (one-liner)
+
+Useful to start both train and api at once:
 
 ```bash
 # Train first, then start the API
