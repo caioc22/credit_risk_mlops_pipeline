@@ -323,7 +323,7 @@ print(requests.post(f"{BASE_URL}/predict", json=batch).json())
 
 ## 6. CI/CD Pipeline
 
-`.github/workflows/ci.yml` runs on **push to `main`** and **PRs targeting
+`.github/workflows/ci.yml` runs on **push to `main`** and **PRs targeting on GitHub Actions
 `main`**:
 
 | Job                  | What it does                                                                                     |
@@ -335,6 +335,8 @@ print(requests.post(f"{BASE_URL}/predict", json=batch).json())
 
 Jobs are independent (each builds the image from the checkout) so failures are
 easy to localize; a registry push is intentionally **simulated** in the logs.
+
+**Check out  `docs/ci`, which contains real CI testing on GitHub Actions**.
 
 ---
 
@@ -443,11 +445,9 @@ The processed feature store is saved as **`data/feature_store.rds`**:
 - It avoids Arrow/C++ build dependencies that would otherwise slow down the image and complicate the pipeline - what ensure a light-weight container.
 ---
 
-## Running Data Modeling & RDS Generation Manually
+### Running Data Modeling & RDS Generation Manually
 
 You can test the data processing and RDS feature store generation locally or inside Docker.
-
-### Option A: Running via Docker (Recommended)
 
 No local R installation is required. Run the processing script inside the container with mounted volume paths:
 
@@ -464,11 +464,56 @@ them are now exposed with user-readable names:
 - `THIRD_PARTY_CREDIT_SCORE_2`: normalized third-party credit score from `application_train.csv` / `application_test.csv` (legacy source column `EXT_SOURCE_2`)
 - `THIRD_PARTY_CREDIT_SCORE_3`: normalized third-party credit score from `application_train.csv` / `application_test.csv` (legacy source column `EXT_SOURCE_3`)
 
-**CI/CD rationale.**
-Four focused jobs (lint → build/train → integration → tagging) mirror the
-delivery stages of a real MLOps pipeline. Each job rebuilds from source so a
-green pipeline guarantees a deployable artifact; `needs:` only gates tagging,
-and the registry push is simulated to keep the workflow secret-free.
+
+## Model Training
+
+The model is trained after the feature store and test set modelling. Here is the training
+workflow:
+
+1. Reads `data/feature_store.rds` and filters the `is_train == 1` partition.
+2. Uses the 7-feature contract from `src/features/metadata.json`
+   (`AMT_INCOME_TOTAL`, `AMT_CREDIT`, `AMT_ANNUITY`, `DAYS_BIRTH`,
+   `DAYS_EMPLOYED`, `THIRD_PARTY_CREDIT_SCORE_2`, `THIRD_PARTY_CREDIT_SCORE_3`).
+3. Imputes missing values (median for numeric, mode for categorical) and
+   records the mapping in the artifact.
+4. Trains a `ranger` probability **Random Forest** classifier, performing a cross-validation
+spliting the training set in 5-folds (80% train, 20% validation),
+   run in parallel across `NUM_CORES` workers (default: detected cores).
+   Lower `NUM_CORES` to bound peak memory on hosts with modest RAM.
+5. Logs out-of-fold metrics (AUC-ROC via the Mann-Whitney U rank statistic,
+   Accuracy, LogLoss) as structured JSON.
+6. Re-trains the final model on all training rows and saves
+   `models/model_v1.rds`.
+7. Writes `data/features_metadata.json` and
+   `models/performance_result.json` for offline performance tracking.
+
+
+```bash
+# Train inside the container (persists artifacts into the repo)
+docker run --rm \
+  -v "$(pwd)/models:/app/models" \
+  -v "$(pwd)/data:/app/data" \
+  agibank-mlops train
+```
+
+Configuration is resolved as **CLI args → env vars → defaults** (`DATA_PATH`,
+`FEATURE_STORE_PATH`, `TEST_SET_PATH`, `RAW_DATA_ZIP`, `MODEL_OUTPUT_PATH`,
+`NUM_TREES`, `NUM_CORES`, `SEED`).
+
+### 1. Why Perform 5-Fold Cross-Validation?
+
+* **Prevents Overfitting & Variance Bias:** Evaluating a credit model on a single static train/validation split introduces sampling bias—the model might perform exceptionally well or poorly simply due to how that specific split was created. 5-Fold Cross-Validation guarantees that every sample in the dataset serves as validation data exactly once.
+* **Unbiased Out-of-Fold (OOF) Baselines:** Generating predictions out-of-sample across all 5 folds produces a complete, un-leakaged set of Out-of-Fold (OOF) probability scores. This gives an honest estimate of how the model will generalize to unseen production data before deployment.
+* **Maximizes Data Efficiency:** In complex credit datasets with aggregated relational tables, data is valuable. Cross-validation uses 100% of the training dataset for both learning (in 80% chunks) and validation (in 20% chunks), eliminating the need to set aside a large static validation set.
+
+### 2. Why Use AUC-ROC as the Primary Evaluation Metric?
+
+* **Class Imbalance Resilience:** Credit default datasets are heavily imbalanced (e.g., ~8% defaults vs. ~92% non-defaults in Home Credit). Metrics like standard **Accuracy** are misleading: a naive model predicting "no default" for every customer would achieve 92% accuracy while missing 100% of risky applicants. AUC-ROC measures ranking capability independent of class prevalence.
+* **Threshold Independence:** AUC-ROC evaluates the model’s fundamental capacity to rank a defaulting applicant ($\text{TARGET} = 1$) higher than a non-defaulting applicant ($\text{TARGET} = 0$) across all possible probability thresholds ($0.0$ to $1.0$). This decouples model assessment from operational business rules.
+* **Direct Equivalence to Financial Risk Standards (Gini Index):** Credit risk and banking regulators universally evaluate scoring models using the **Gini Coefficient** (Power Statistic). AUC-ROC maintains a direct mathematical relationship with Gini:
+  $$\text{Gini} = 2 \times \text{AUC} - 1$$
+  Optimizing AUC-ROC directly maximizes the discriminatory power required by credit risk committees and banking frameworks.
+
 
 ---
 
