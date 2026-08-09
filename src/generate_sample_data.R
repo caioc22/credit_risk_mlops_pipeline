@@ -9,10 +9,13 @@
 #
 # Configuration (CLI args override environment variables, which override
 # defaults):
-#   DATA_PATH           (env, default: data/sample_credit_data.csv)
+#   SAMPLE_DATA_PATH    (env, default: data/sample_credit_data.csv)
 #   FEATURE_STORE_PATH  (env, default: data/feature_store.rds)
 #   N_ROWS              (env, default: 3000)
 #   --seed              (default: 42)
+#
+# Note: DATA_PATH is reserved for src/train.R (feature store input) and must
+# not be reused here, because the Dockerfile sets it to data/feature_store.rds.
 #
 # Outputs:
 #   - data/sample_credit_data.csv  (mock raw dataset for CI / local runs)
@@ -37,7 +40,7 @@ log_json <- function(level, message, ...) {
 option_list <- list(
   make_option(c("-o", "--output-path"),
     type = "character",
-    default = Sys.getenv("DATA_PATH", "data/sample_credit_data.csv"),
+    default = Sys.getenv("SAMPLE_DATA_PATH", "data/sample_credit_data.csv"),
     help = "Output CSV path [default: %default]"
   ),
   make_option(c("-f", "--feature-store-path"),
