@@ -117,7 +117,7 @@ All paths in `api/plumber.R` resolve relative to working directory or environmen
   "status": "healthy",
   "timestamp": "2026-08-06T14:30:00Z",
   "model_loaded": true,
-  "model_version": "v1"
+  "model_version": "v1.0.0"
 }
 
 ```
@@ -154,7 +154,7 @@ All paths in `api/plumber.R` resolve relative to working directory or environmen
   "timestamp": "2026-08-06T14:30:05Z",
   "default_probability": 0.1425,
   "risk_label": "LOW_RISK",
-  "model_version": "v1",
+  "model_version": "v1.0.0",
   "processing_time_ms": 12.4
 }
 
@@ -202,8 +202,8 @@ Generated automatically during model training:
 
 ```json
 {
-  "model_version": "v1",
-  "schema_version": "1.0",
+  "model_version": "v1.0.0",
+  "schema_version": "1.0.0",
   "generated_at": "2026-08-06T14:30:00Z",
   "total_features": 7,
   "features": [
@@ -256,3 +256,5 @@ Generated automatically during model training:
 | 3 | Apply the same feature-engineering modelling pipeline to `application_test.csv` and generate `data/test_set.rds` for final performance tracking | `src/data_modelling.R` | ✅ Completed |
 | 4 | Save final performance tracking results as `models/performance_result.json` | `src/train.R` | ✅ Completed |
 | 5 | Run cross-validation folds in parallel (using `parallel::mclapply`) to reduce training time | `src/train.R` | ✅ Completed |
+| 6 | Align the training artifact and metadata contract to the 7-feature API schema and version `v1.0.0` | `src/train.R`, `src/features/metadata.json` | ✅ Completed |
+| 7 | Verify the Docker build, Compose startup, endpoint responses, and log output end to end | `Dockerfile`, `docker-compose.yml`, `tests/test_api.R` | ✅ Completed |
