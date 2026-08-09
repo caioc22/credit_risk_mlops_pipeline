@@ -7,12 +7,13 @@
 # Pipeline:
 #   1. Resolve CLI configuration / environment variables
 #   2. Load RDS feature store (data/feature_store.rds)
-#   3. Extract target and predictor features (excluding SK_ID_CURR & is_train)
-#   4. Impute missing values (median for numeric, mode for categorical)
-#   5. Train Random Forest (ranger) predicting TARGET
-#   6. Evaluate performance on hold-out validation split
-#   7. Save model artifact (models/model_v1.rds)
-#   8. Export feature store metadata schema (data/features_metadata.json)
+#   3. Load the authoritative feature schema (src/features/metadata.json)
+#   4. Extract target and predictor features (excluding SK_ID_CURR & is_train)
+#   5. Impute missing values (median for numeric, mode for categorical)
+#   6. Train Random Forest (ranger) predicting TARGET
+#   7. Evaluate performance on hold-out validation split
+#   8. Save model artifact (models/model_v1.rds)
+#   9. Export feature store metadata schema (data/features_metadata.json)
 # ------------------------------------------------------------------------------
 
 suppressPackageStartupMessages({
@@ -43,6 +44,12 @@ option_list <- list(
     dest = "metadata_output_path",
     help = "Path where feature metadata JSON is saved [default: %default]"
   ),
+  make_option("--feature-schema-path",
+    type = "character",
+    default = Sys.getenv("FEATURE_SCHEMA_PATH", "src/features/metadata.json"),
+    dest = "feature_schema_path",
+    help = "Path to the authoritative feature schema JSON [default: %default]"
+  ),
   make_option(c("-l", "--log-level"),
     type = "character",
     default = Sys.getenv("LOG_LEVEL", "INFO"),
@@ -69,7 +76,7 @@ option_list <- list(
   ),
   make_option("--num-trees",
     type = "integer",
-    default = as.integer(Sys.getenv("NUM_TREES", "300")),
+    default = as.integer(Sys.getenv("NUM_TREES", "100")),
     dest = "num_trees",
     help = "Number of trees in the Random Forest [default: %default]"
   ),
@@ -78,6 +85,12 @@ option_list <- list(
     default = 42,
     dest = "seed",
     help = "Random seed for reproducibility [default: %default]"
+  ),
+  make_option("--num-cores",
+    type = "integer",
+    default = as.integer(Sys.getenv("NUM_CORES", "-1")),
+    dest = "num_cores",
+    help = "Number of cores/workers for the parallel cross-validation; -1 = auto-detect. Reduce this to bound peak memory on small hosts [default: %default]"
   )
 )
 
@@ -111,6 +124,8 @@ log_at <- function(level, ...) {
   if (level_rank[[level]] >= min_rank) log_json(level, ...)
 }
 
+`%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
+
 # --- Evaluation Metrics & Helper Utilities ------------------------------------
 
 get_mode <- function(x) {
@@ -131,6 +146,42 @@ log_loss <- function(probs, labels) {
   -mean(ifelse(labels == 1, log(pmax(probs, eps)), log(pmax(1 - probs, eps))))
 }
 
+load_training_data <- function(path) {
+  lower_path <- tolower(path)
+  if (grepl("[.]rds$", lower_path)) {
+    return(readRDS(path))
+  }
+  if (grepl("[.]csv$", lower_path)) {
+    return(read.csv(path, stringsAsFactors = FALSE, check.names = FALSE))
+  }
+
+  tryCatch(
+    readRDS(path),
+    error = function(e) {
+      log_at("WARN", paste("readRDS failed for", path, "- trying CSV fallback:", conditionMessage(e)))
+      read.csv(path, stringsAsFactors = FALSE, check.names = FALSE)
+    }
+  )
+}
+
+# Keep the model contract readable without breaking older feature stores that
+# still expose the legacy Home Credit column names.
+apply_feature_aliases <- function(df) {
+  alias_map <- c(
+    THIRD_PARTY_CREDIT_SCORE_2 = "EXT_SOURCE_2",
+    THIRD_PARTY_CREDIT_SCORE_3 = "EXT_SOURCE_3"
+  )
+
+  for (friendly_name in names(alias_map)) {
+    source_name <- alias_map[[friendly_name]]
+    if (source_name %in% colnames(df) && !(friendly_name %in% colnames(df))) {
+      names(df)[names(df) == source_name] <- friendly_name
+    }
+  }
+
+  df
+}
+
 # --- 2. Load Feature Store ----------------------------------------------------
 
 if (!file.exists(opt$data_path)) {
@@ -139,11 +190,12 @@ if (!file.exists(opt$data_path)) {
 }
 
 log_at("INFO", paste("Loading feature store from:", opt$data_path))
-data <- readRDS(opt$data_path)
+data <- load_training_data(opt$data_path)
 
 if (!is.data.frame(data)) {
   data <- as.data.frame(data)
 }
+data <- apply_feature_aliases(data)
 
 # Filter training partition if 'is_train' flag exists
 if ("is_train" %in% colnames(data)) {
@@ -156,9 +208,51 @@ if (!"TARGET" %in% colnames(data)) {
   quit(save = "no", status = 1)
 }
 
-# Exclude identifiers and split indicators from predictor features
+# Load the authoritative feature schema used by serving and tests. The training
+# data may contain many more aggregated columns, but the model contract is the
+# feature list declared in src/features/metadata.json.
+feature_schema <- NULL
+if (file.exists(opt$feature_schema_path)) {
+  feature_schema <- tryCatch(
+    fromJSON(opt$feature_schema_path, simplifyVector = FALSE),
+    error = function(e) {
+      log_at("WARN", paste("Failed to parse feature schema:", conditionMessage(e)))
+      NULL
+    }
+  )
+} else {
+  log_at("WARN", paste("Feature schema not found at:", opt$feature_schema_path, "- falling back to all feature store columns"))
+}
+
 exclude_cols <- c("SK_ID_CURR", "TARGET", "is_train")
-feature_names <- setdiff(colnames(data), exclude_cols)
+
+schema_feature_names <- character(0)
+schema_model_version <- "v1.0.0"
+schema_version <- "1.0.0"
+schema_target <- list(name = "TARGET", type = "binary")
+schema_thresholds <- list(high_risk_cutoff = 0.5)
+
+if (!is.null(feature_schema) && length(feature_schema$features) > 0) {
+  schema_feature_names <- vapply(feature_schema$features, function(f) f$name, character(1))
+  schema_model_version <- feature_schema$model_version %||% schema_model_version
+  schema_version <- feature_schema$schema_version %||% schema_version
+  schema_target <- feature_schema$target %||% schema_target
+  schema_thresholds <- feature_schema$thresholds %||% schema_thresholds
+}
+
+if (length(schema_feature_names) > 0) {
+  missing_schema_features <- setdiff(schema_feature_names, colnames(data))
+  if (length(missing_schema_features) > 0) {
+    log_at("FATAL", paste(
+      "Feature store is missing schema feature(s):",
+      paste(missing_schema_features, collapse = ", ")
+    ))
+    quit(save = "no", status = 1)
+  }
+  feature_names <- schema_feature_names
+} else {
+  feature_names <- setdiff(colnames(data), exclude_cols)
+}
 
 if (length(feature_names) == 0) {
   log_at("FATAL", "No predictor features found in dataset")
@@ -202,8 +296,17 @@ if (nrow(train_df) < 10) {
 n_folds <- opt$n_folds
 fold_ids <- sample(rep(seq_len(n_folds), length.out = nrow(train_df)))
 
-# Detect available cores; mclapply uses forking (Unix only — falls back to 1 on Windows)
-n_cores <- if (.Platform$OS.type == "windows") 1L else min(n_folds, detectCores(logical = FALSE))
+# Detect available cores; mclapply uses forking (Unix only — falls back to 1 on
+# Windows). Peak memory grows linearly with the number of concurrent fold
+# builds, so allow an explicit NUM_CORES/--num-cores cap to avoid OOM on hosts
+# with modest RAM.
+n_cores <- if (opt$num_cores > 0) {
+  min(n_folds, opt$num_cores)
+} else if (.Platform$OS.type == "windows") {
+  1L
+} else {
+  min(n_folds, detectCores(logical = FALSE))
+}
 
 log_at("INFO", "Starting parallel cross-validation",
   algorithm = "ranger (Random Forest)",
@@ -308,7 +411,11 @@ model_artifact <- list(
   target_levels = c("0", "1"),
   default_label = "1",
   trained_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
-  metrics = metrics
+  metrics = metrics,
+  version = schema_model_version,
+  schema_version = schema_version,
+  target = schema_target,
+  thresholds = schema_thresholds
 )
 class(model_artifact) <- "credit_model"
 
@@ -317,6 +424,7 @@ saveRDS(model_artifact, opt$model_output_path)
 
 log_at("INFO", "Model artifact saved successfully",
   path = opt$model_output_path,
+  version = schema_model_version,
   file_size_bytes = file.info(opt$model_output_path)$size
 )
 
@@ -335,10 +443,12 @@ features_list <- lapply(feature_names, function(fname) {
 })
 
 metadata_payload <- list(
-  model_version = "v1",
-  schema_version = "1.0",
+  model_version = schema_model_version,
+  schema_version = schema_version,
   generated_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
   total_features = length(feature_names),
+  target = schema_target,
+  thresholds = schema_thresholds,
   features = features_list
 )
 
@@ -398,7 +508,7 @@ if (file.exists(opt$test_set_path)) {
 dir.create(dirname(opt$performance_output_path), showWarnings = FALSE, recursive = TRUE)
 
 performance_result <- list(
-  model_version = "v1",
+  model_version = schema_model_version,
   trained_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
   cv_metrics = list(
     auc_roc  = cv_metrics$auc_roc,
