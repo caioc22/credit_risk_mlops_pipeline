@@ -12,15 +12,16 @@ FROM rocker/r-ver:4.3.2
 
 ENV DEBIAN_FRONTEND=noninteractive \
     R_REPOS=https://cloud.r-project.org \
-    DATA_PATH=data/sample_credit_data.csv \
+    DATA_PATH=data/feature_store.rds \
+    FEATURE_STORE_PATH=data/feature_store.rds \
+    TEST_SET_PATH=data/test_set.rds \
+    RAW_DATA_ZIP=data/home-credit-default-risk.zip \
     MODEL_OUTPUT_PATH=models/model_v1.rds \
     METADATA_PATH=src/features/metadata.json \
     PORT=8080 \
     LOG_LEVEL=INFO
 
 # OS-level dependencies required to compile the R packages below.
-# Note: cmake and zlib1g-dev were removed — they were only needed by the
-# Apache Arrow C++ engine (arrow/parquet), which has been replaced by native .rds.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libcurl4-openssl-dev \
     libssl-dev \

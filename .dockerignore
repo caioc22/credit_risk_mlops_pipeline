@@ -4,3 +4,8 @@
 models/*.rds
 *.log
 .DS_Store
+# Heavy raw data is bind-mounted at runtime; never bake it into the image.
+data/
+*.csv
+*.zip
+*.ipynb
