@@ -21,3 +21,7 @@ logs/
 # Docker
 *.tar
 *.zip
+
+# Data
+*.csv
+.codex
