@@ -1,8 +1,16 @@
 {
-  "model_version": "v1",
-  "schema_version": "1.0",
-  "generated_at": "2026-08-06T16:19:17Z",
-  "total_features": 30,
+  "model_version": "v1.0.0",
+  "schema_version": "1.0.0",
+  "generated_at": "2026-08-09T16:42:48Z",
+  "total_features": 7,
+  "target": {
+    "name": "TARGET",
+    "type": "binary",
+    "description": "0 = Repaid, 1 = Defaulted"
+  },
+  "thresholds": {
+    "high_risk_cutoff": 0.5
+  },
   "features": [
     {
       "name": "AMT_INCOME_TOTAL",
@@ -35,154 +43,16 @@
       "imputed_default": {}
     },
     {
-      "name": "EXT_SOURCE_2",
+      "name": "THIRD_PARTY_CREDIT_SCORE_2",
       "type": "numeric",
       "required": true,
       "imputed_default": 0.566
     },
     {
-      "name": "EXT_SOURCE_3",
+      "name": "THIRD_PARTY_CREDIT_SCORE_3",
       "type": "numeric",
       "required": true,
       "imputed_default": 0.5353
-    },
-    {
-      "name": "bureau_count",
-      "type": "numeric",
-      "required": true,
-      "imputed_default": 4
-    },
-    {
-      "name": "bureau_credit_active_mean",
-      "type": "numeric",
-      "required": true,
-      "imputed_default": 0.625
-    },
-    {
-      "name": "bureau_sum_credit",
-      "type": "numeric",
-      "required": true,
-      "imputed_default": 961704
-    },
-    {
-      "name": "bureau_sum_debt",
-      "type": "numeric",
-      "required": true,
-      "imputed_default": 169020
-    },
-    {
-      "name": "bureau_max_overdue",
-      "type": "numeric",
-      "required": true,
-      "imputed_default": 0
-    },
-    {
-      "name": "bureau_avg_days_credit",
-      "type": "numeric",
-      "required": true,
-      "imputed_default": -1050.5714
-    },
-    {
-      "name": "prev_app_count",
-      "type": "numeric",
-      "required": true,
-      "imputed_default": 4
-    },
-    {
-      "name": "prev_approval_rate",
-      "type": "numeric",
-      "required": true,
-      "imputed_default": 0.8
-    },
-    {
-      "name": "prev_refusal_rate",
-      "type": "numeric",
-      "required": true,
-      "imputed_default": 0
-    },
-    {
-      "name": "prev_mean_credit",
-      "type": "numeric",
-      "required": true,
-      "imputed_default": 117450
-    },
-    {
-      "name": "prev_mean_annuity",
-      "type": "numeric",
-      "required": true,
-      "imputed_default": 11984.355
-    },
-    {
-      "name": "prev_downpayment_ratio",
-      "type": "numeric",
-      "required": true,
-      "imputed_default": 0.0665
-    },
-    {
-      "name": "pos_months_count",
-      "type": "numeric",
-      "required": true,
-      "imputed_default": 22
-    },
-    {
-      "name": "pos_max_dpd",
-      "type": "numeric",
-      "required": true,
-      "imputed_default": 0
-    },
-    {
-      "name": "pos_completed_ratio",
-      "type": "numeric",
-      "required": true,
-      "imputed_default": 0.0769
-    },
-    {
-      "name": "inst_count",
-      "type": "numeric",
-      "required": true,
-      "imputed_default": 25
-    },
-    {
-      "name": "inst_max_delay",
-      "type": "numeric",
-      "required": true,
-      "imputed_default": 1
-    },
-    {
-      "name": "inst_mean_delay",
-      "type": "numeric",
-      "required": true,
-      "imputed_default": -9.5417
-    },
-    {
-      "name": "inst_mean_underpayment",
-      "type": "numeric",
-      "required": true,
-      "imputed_default": 0
-    },
-    {
-      "name": "cc_months_count",
-      "type": "numeric",
-      "required": true,
-      "imputed_default": 22
-    },
-    {
-      "name": "cc_mean_balance",
-      "type": "numeric",
-      "required": true,
-      "imputed_default": 26793.6063
-    },
-    {
-      "name": "cc_mean_drawing",
-      "type": "numeric",
-      "required": true,
-      "imputed_default": 3473.6719
-    },
-    {
-      "name": "cc_max_dpd",
-      "type": "numeric",
-      "required": true,
-      "imputed_default": 0
     }
   ]
 }

@@ -44,9 +44,13 @@ valid_payload <- list(
   AMT_ANNUITY = 25000.0,
   DAYS_BIRTH = -12000,
   DAYS_EMPLOYED = -2000,
-  EXT_SOURCE_2 = 0.55,
-  EXT_SOURCE_3 = 0.42
+  THIRD_PARTY_CREDIT_SCORE_2 = 0.55,
+  THIRD_PARTY_CREDIT_SCORE_3 = 0.42
 )
+
+# External credit sources (EXT_SOURCE_*) are NOT required; only the five core
+# features are mandatory.
+minimal_payload <- valid_payload[!names(valid_payload) %in% c("THIRD_PARTY_CREDIT_SCORE_2", "THIRD_PARTY_CREDIT_SCORE_3")]
 
 test_that("GET /health returns a healthy status", {
   resp <- GET(paste0(api_url, "/health"))
@@ -66,6 +70,8 @@ test_that("GET /model-info exposes schema metadata and runtime info", {
   expect_equal(body$model_version, "v1.0.0")
   expect_gte(length(body$features), 7)
   expect_true(any(vapply(body$features, function(f) identical(f$name, "AMT_INCOME_TOTAL"), logical(1))))
+  optional_names <- vapply(body$optional_features, function(f) f$name, character(1))
+  expect_true(all(c("EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3") %in% optional_names))
   expect_equal(body$thresholds$high_risk_cutoff, 0.5)
   expect_true(nchar(body$runtime$r_version) > 0)
   expect_true(is.character(body$runtime$model_hash_md5) && nchar(body$runtime$model_hash_md5) == 32)
@@ -83,13 +89,37 @@ test_that("POST /predict returns a valid prediction for a single record", {
   expect_equal(body$model_version, "v1.0.0")
 })
 
-test_that("POST /predict rejects missing fields with a 400", {
-  bad <- valid_payload[names(valid_payload) != "EXT_SOURCE_2"]
+test_that("POST /predict rejects missing required fields with a 400", {
+  bad <- valid_payload
+  bad$AMT_CREDIT <- NULL
   resp <- POST(paste0(api_url, "/predict"), body = bad, encode = "json")
   expect_equal(status_code(resp), 400)
   body <- parse_body(resp)
   expect_equal(body$error, "ValidationFailed")
-  expect_match(body$message, "EXT_SOURCE_2")
+  expect_match(body$message, "AMT_CREDIT")
+})
+
+test_that("POST /predict accepts a payload without external credit source fields", {
+  resp <- POST(paste0(api_url, "/predict"), body = minimal_payload, encode = "json")
+  expect_equal(status_code(resp), 200)
+  body <- parse_body(resp)
+  expect_true(body$default_probability >= 0 && body$default_probability <= 1)
+  expect_true(body$risk_label %in% c("LOW_RISK", "HIGH_RISK"))
+})
+
+test_that("POST /predict accepts legacy EXT_SOURCE_2/EXT_SOURCE_3 aliases", {
+  payload <- minimal_payload
+  payload$EXT_SOURCE_2 <- 0.55
+  payload$EXT_SOURCE_3 <- 0.42
+  resp <- POST(paste0(api_url, "/predict"), body = payload, encode = "json")
+  expect_equal(status_code(resp), 200)
+})
+
+test_that("POST /predict accepts the optional EXT_SOURCE_1 field", {
+  payload <- valid_payload
+  payload$EXT_SOURCE_1 <- 0.3
+  resp <- POST(paste0(api_url, "/predict"), body = payload, encode = "json")
+  expect_equal(status_code(resp), 200)
 })
 
 test_that("POST /predict rejects non-numeric values with a 400", {
@@ -102,18 +132,30 @@ test_that("POST /predict rejects non-numeric values with a 400", {
   expect_match(body$message, "AMT_INCOME_TOTAL")
 })
 
-test_that("POST /predict rejects explicit null values with a 400", {
+test_that("POST /predict rejects explicit null values for required fields with a 400", {
   resp <- POST(
     paste0(api_url, "/predict"),
     body = paste0(
       '{"AMT_INCOME_TOTAL":150000,"AMT_CREDIT":450000,"AMT_ANNUITY":25000,',
-      '"DAYS_BIRTH":-12000,"DAYS_EMPLOYED":-2000,"EXT_SOURCE_2":0.55,"EXT_SOURCE_3":null}'
+      '"DAYS_BIRTH":null,"DAYS_EMPLOYED":-2000,"THIRD_PARTY_CREDIT_SCORE_2":0.55,"THIRD_PARTY_CREDIT_SCORE_3":0.42}'
     ),
     content_type_json()
   )
   expect_equal(status_code(resp), 400)
   body <- parse_body(resp)
   expect_equal(body$error, "ValidationFailed")
+})
+
+test_that("POST /predict treats null optional external fields as absent", {
+  resp <- POST(
+    paste0(api_url, "/predict"),
+    body = paste0(
+      '{"AMT_INCOME_TOTAL":150000,"AMT_CREDIT":450000,"AMT_ANNUITY":25000,',
+      '"DAYS_BIRTH":-12000,"DAYS_EMPLOYED":-2000,"THIRD_PARTY_CREDIT_SCORE_2":0.55,"THIRD_PARTY_CREDIT_SCORE_3":null}'
+    ),
+    content_type_json()
+  )
+  expect_equal(status_code(resp), 200)
 })
 
 test_that("POST /predict rejects an empty body with a 400", {

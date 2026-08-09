@@ -1,4 +1,4 @@
-# Agibank Credit Risk MLOps Pipeline
+# Credit Risk MLOps Pipeline
 
 ![CI/CD](https://img.shields.io/badge/CI-CD-2088FF?logo=githubactions&logoColor=white)
 ![Build Status](https://img.shields.io/badge/build-passing-brightgreen)
@@ -14,7 +14,8 @@
 ## 1. Overview
 
 This repository implements a complete MLOps pipeline around a Random Forest
-credit default model trained in **R**:
+credit default model trained in **R**, whose training dataset is 
+[Home Credit Default Risk](https://www.kaggle.com/competitions/home-credit-default-risk/data):
 
 1. **Isolated training** – the model is trained inside a Docker container from
    environment variables, producing a reproducible `models/model_v1.rds`
@@ -67,12 +68,11 @@ flowchart LR
 ## 2. Repository Structure
 
 ```text
-agibank-mlops-challenge/
+credit-risk-mlops-challenge/
 ├── .github/workflows/
 │   └── ci.yml                 # CI/CD pipeline (lint, build, test, tag)
 ├── src/
 │   ├── train.R                # Isolated training script (env-var driven)
-│   ├── generate_sample_data.R # Synthetic Home Credit-like data generator
 │   └── features/
 │       └── metadata.json      # Versioned feature schema (schema 1.0.0)
 ├── api/
@@ -243,8 +243,8 @@ curl -s -X POST http://localhost:8080/predict \
     "AMT_ANNUITY": 25000.0,
     "DAYS_BIRTH": -12000,
     "DAYS_EMPLOYED": -2000,
-    "EXT_SOURCE_2": 0.55,
-    "EXT_SOURCE_3": 0.42
+    "THIRD_PARTY_CREDIT_SCORE_2": 0.55,
+    "THIRD_PARTY_CREDIT_SCORE_3": 0.42
   }'
 ```
 
@@ -268,8 +268,8 @@ curl -s -X POST http://localhost:8080/predict \
 curl -s -X POST http://localhost:8080/predict \
   -H "Content-Type: application/json" \
   -d '[
-    {"AMT_INCOME_TOTAL":150000,"AMT_CREDIT":450000,"AMT_ANNUITY":25000,"DAYS_BIRTH":-12000,"DAYS_EMPLOYED":-2000,"EXT_SOURCE_2":0.55,"EXT_SOURCE_3":0.42},
-    {"AMT_INCOME_TOTAL":60000,"AMT_CREDIT":200000,"AMT_ANNUITY":12000,"DAYS_BIRTH":-8000,"DAYS_EMPLOYED":-300,"EXT_SOURCE_2":0.21,"EXT_SOURCE_3":0.18}
+    {"AMT_INCOME_TOTAL":150000,"AMT_CREDIT":450000,"AMT_ANNUITY":25000,"DAYS_BIRTH":-12000,"DAYS_EMPLOYED":-2000,"THIRD_PARTY_CREDIT_SCORE_2":0.55,"THIRD_PARTY_CREDIT_SCORE_3":0.42},
+    {"AMT_INCOME_TOTAL":60000,"AMT_CREDIT":200000,"AMT_ANNUITY":12000,"DAYS_BIRTH":-8000,"DAYS_EMPLOYED":-300,"THIRD_PARTY_CREDIT_SCORE_2":0.21,"THIRD_PARTY_CREDIT_SCORE_3":0.18}
   ]'
 ```
 
@@ -286,7 +286,7 @@ curl -s -X POST http://localhost:8080/predict \
 ```json
 {
   "error": "ValidationFailed",
-  "message": "[record 1] Missing required field: AMT_CREDIT; Missing required field: AMT_ANNUITY; Missing required field: DAYS_BIRTH; Missing required field: DAYS_EMPLOYED; Missing required field: EXT_SOURCE_2; Missing required field: EXT_SOURCE_3",
+  "message": "[record 1] Missing required field: AMT_CREDIT; Missing required field: AMT_ANNUITY; Missing required field: DAYS_BIRTH; Missing required field: DAYS_EMPLOYED; Missing required field: THIRD_PARTY_CREDIT_SCORE_2; Missing required field: THIRD_PARTY_CREDIT_SCORE_3",
   "timestamp": "2026-08-05T12:00:10Z"
 }
 ```
@@ -317,8 +317,8 @@ payload = {
     "AMT_ANNUITY": 25000.0,
     "DAYS_BIRTH": -12000,
     "DAYS_EMPLOYED": -2000,
-    "EXT_SOURCE_2": 0.55,
-    "EXT_SOURCE_3": 0.42,
+    "THIRD_PARTY_CREDIT_SCORE_2": 0.55,
+    "THIRD_PARTY_CREDIT_SCORE_3": 0.42,
 }
 resp = requests.post(f"{BASE_URL}/predict", json=payload)
 print(resp.json())
@@ -362,7 +362,6 @@ All behavior is driven by environment variables (defaults shown):
 | `PORT`              | `8080`                         | api         | API listening port                     |
 | `LOG_LEVEL`         | `INFO`                         | train/api   | `TRACE`…`FATAL` structured log level   |
 | `NUM_TREES`         | `300`                          | train       | Random Forest tree count               |
-| `N_ROWS`            | `3000`                         | generate    | Sample dataset size                    |
 
 CLI arguments (`--data-path`, `--model-output-path`, `--num-trees`, `--seed`,
 etc.) always take precedence over environment variables.
@@ -390,11 +389,13 @@ and 404 handling.
 ## 9. Technical Decisions & Tradeoffs
 
 **R + Plumber instead of Python FastAPI.**
-Agibank's Data Science team models in R, so the production runtime mirrors the
-research runtime. This removes the R→Python rewrite risk (feature parity,
-inference skew) and lets the exact trained object (`ranger`) be served as-is.
-Plumber is the de-facto R REST framework, supports OpenAPI 3 documentation
-out-of-the-box (`/__docs__/`) and integrates natively with R's ecosystem.
+The production runtime mirrors the research runtime of Agibank. So, a full R 
+environment was selected instead of Python for both machine learning traning and
+model serving, avoiding rewrite risk (feature parity, inference skew) and overhead 
+between R-Python communication interface, letting the exact trained object (`ranger`) 
+be served as-is. Plumber is the de-facto R REST framework, supports OpenAPI 3 
+documentation out-of-the-box (Swagger, `/__docs__/`) and integrates natively 
+with R's ecosystem.
 
 **Validation driven by a single source of truth.**
 Training, API validation and documentation all read
@@ -422,16 +423,16 @@ dependency-free evaluation (AUC computed via the Mann-Whitney U statistic)
 keep the training step deterministic and dependency-light. The model artifact
 embeds version, training timestamp and metrics for full traceability.
 
-## 📊 Data Modeling & Feature Store Motivation
+## Data Modeling 
 
-The Home Credit Default Risk dataset is a multi-table relational schema centered around a primary key: `SK_ID_CURR` (the loan application ID). To transform this relational database into a tabular Feature Store for machine learning, all historical tables ($1:N$ relationships) are aggregated up to a $1:1$ grain per applicant before joining with `application_{train|test}.csv`.
+The Home Credit Default Risk dataset is a multi-table relational schema centered around a primary key: `SK_ID_CURR` (the loan application ID). To transform this relational database into a tabular Feature Store for machine learning, all historical tables ($1:N$ relationships) are aggregated up to a $1:1$ grain per applicant before joining with `application_{train|test}.csv` to compose the training and test sets.
 
 ### Why Specific Features Were Selected
 
 1. **Core Application Snapshot (`application_{train|test}.csv`)**
    * `AMT_INCOME_TOTAL`, `AMT_CREDIT`, `AMT_ANNUITY`: Capture income-to-debt ratios and baseline leverage.
    * `DAYS_BIRTH`, `DAYS_EMPLOYED`: Proxy applicant stability and age demographics.
-   * `EXT_SOURCE_2`, `EXT_SOURCE_3`: Normalized external risk scores provided by third-party credit bureaus (historically the strongest predictive signals in this dataset).
+   * `THIRD_PARTY_CREDIT_SCORE_2`, `THIRD_PARTY_CREDIT_SCORE_3`: Normalized third-party credit scores stored in `application_train.csv` / `application_test.csv` and sourced from external credit providers.
 
 2. **External Bureau History (`bureau.csv` & `bureau_balance.csv`)**
    * `bureau_sum_debt` & `bureau_max_overdue`: Quantify existing indebtedness outside Home Credit and historical delinquency severity.
@@ -543,5 +544,3 @@ Configuration is resolved as **CLI args → env vars → defaults** (`DATA_PATH`
 Sample data is synthetic and generated locally – no real customer data is
 involved. This project is an engineering exercise for the Agibank MLOps
 challenge.
-
-

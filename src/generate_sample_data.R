@@ -9,9 +9,14 @@
 #
 # Configuration (CLI args override environment variables, which override
 # defaults):
-#   DATA_PATH   (env, default: data/sample_credit_data.csv)
-#   N_ROWS      (env, default: 3000)
-#   --seed      (default: 42)
+#   DATA_PATH           (env, default: data/sample_credit_data.csv)
+#   FEATURE_STORE_PATH  (env, default: data/feature_store.rds)
+#   N_ROWS              (env, default: 3000)
+#   --seed              (default: 42)
+#
+# Outputs:
+#   - data/sample_credit_data.csv  (mock raw dataset for CI / local runs)
+#   - data/feature_store.rds       (RDS store consumed by src/train.R)
 # ------------------------------------------------------------------------------
 
 suppressPackageStartupMessages({
@@ -35,6 +40,11 @@ option_list <- list(
     default = Sys.getenv("DATA_PATH", "data/sample_credit_data.csv"),
     help = "Output CSV path [default: %default]"
   ),
+  make_option(c("-f", "--feature-store-path"),
+    type = "character",
+    default = Sys.getenv("FEATURE_STORE_PATH", "data/feature_store.rds"),
+    help = "Output RDS feature store path [default: %default]"
+  ),
   make_option(c("-n", "--n-rows"),
     type = "integer",
     default = as.integer(Sys.getenv("N_ROWS", "3000")),
@@ -56,18 +66,24 @@ opt <- parse_args(OptionParser(option_list = option_list))
 
 # optparse normalizes option names to hyphens; map back to underscore accessors.
 opt$output_path <- opt$`output-path`
+opt$feature_store_path <- opt$`feature-store-path`
 opt$n_rows <- opt$`n-rows`
 
 set.seed(opt$seed)
 
-if (file.exists(opt$output_path) && !opt$force) {
-  log_json("INFO", "Output file already exists; skipping generation",
-    path = opt$output_path
+csv_exists <- file.exists(opt$output_path)
+rds_exists <- file.exists(opt$feature_store_path)
+
+if (csv_exists && rds_exists && !opt$force) {
+  log_json("INFO", "Output files already exist; skipping generation",
+    csv_path = opt$output_path,
+    feature_store_path = opt$feature_store_path
   )
   quit(save = "no", status = 0)
 }
 
 dir.create(dirname(opt$output_path), showWarnings = FALSE, recursive = TRUE)
+dir.create(dirname(opt$feature_store_path), showWarnings = FALSE, recursive = TRUE)
 
 n <- opt$n_rows
 
@@ -112,9 +128,15 @@ df <- data.frame(
 
 write.csv(df, opt$output_path, row.names = FALSE)
 
+# Train.R expects an RDS feature store with an is_train partition flag.
+feature_store <- df
+feature_store$is_train <- 1L
+saveRDS(feature_store, opt$feature_store_path, compress = "gzip")
+
 log_json("INFO", "Sample data generated successfully",
   rows = nrow(df),
   columns = ncol(df),
   default_rate = round(mean(df$TARGET), 4),
-  path = opt$output_path
+  csv_path = opt$output_path,
+  feature_store_path = opt$feature_store_path
 )

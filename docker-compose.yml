@@ -15,11 +15,22 @@ services:
       dockerfile: Dockerfile
     command: train
     environment:
-      DATA_PATH: data/sample_credit_data.csv
+      # First run: data_modelling.R unpacks data/home-credit-default-risk.zip
+      # (bind-mounted through ./data) into data/feature_store.rds +
+      # data/test_set.rds, then removes the extracted CSVs and the raw .zip.
+      DATA_PATH: data/feature_store.rds
+      FEATURE_STORE_PATH: data/feature_store.rds
+      TEST_SET_PATH: data/test_set.rds
+      RAW_DATA_ZIP: data/home-credit-default-risk.zip
       MODEL_OUTPUT_PATH: models/model_v1.rds
       METADATA_PATH: src/features/metadata.json
       LOG_LEVEL: INFO
-      NUM_TREES: "300"
+      NUM_TREES: "100"
+      # Cap parallel CV workers to bound peak memory (avoid host OOM on this
+      # 15 GiB machine); 5 concurrent ranger builds over ~300k rows was the
+      # cause of the earlier exit-137 kill.
+      NUM_CORES: "2"
+    mem_limit: 8g
     volumes:
       - ./models:/app/models
       - ./data:/app/data
@@ -39,6 +50,7 @@ services:
       LOG_LEVEL: INFO
     volumes:
       - ./models:/app/models
+      - ./data:/app/data
     depends_on:
       train:
         condition: service_completed_successfully

@@ -16,7 +16,9 @@ if [ $# -gt 0 ]; then shift; fi
 
 case "${MODE}" in
   train)
-    echo "[entrypoint] Mode=train -> Rscript src/train.R"
+    echo "[entrypoint] Mode=train -> Step 1/2: src/data_modelling.R (unzip -> feature store)"
+    Rscript src/data_modelling.R
+    echo "[entrypoint] Mode=train -> Step 2/2: src/train.R"
     exec Rscript src/train.R "$@"
     ;;
   serve)
