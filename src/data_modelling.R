@@ -227,6 +227,26 @@ cleanup_extracted_csvs <- function(data_dir) {
   invisible(all(removed))
 }
 
+cleanup_raw_zip <- function(zip_path, keep_raw_zip = FALSE) {
+  if (keep_raw_zip) {
+    safe_info(sprintf("Keeping raw archive as requested: %s.", zip_path))
+    return(invisible(FALSE))
+  }
+
+  if (!file.exists(zip_path)) {
+    safe_info(sprintf("Raw archive already absent, nothing to remove: %s.", zip_path))
+    return(invisible(TRUE))
+  }
+
+  if (file.remove(zip_path)) {
+    safe_info(sprintf("Raw archive removed to keep the pipeline lightweight: %s.", zip_path))
+    return(invisible(TRUE))
+  }
+
+  safe_warn(sprintf("Could not remove raw archive: %s.", zip_path))
+  invisible(FALSE)
+}
+
 # --- Aggregations -------------------------------------------------------------
 
 build_bureau_aggregates <- function(data_dir) {
@@ -388,14 +408,7 @@ main <- function() {
       saveRDS(test_store, file = opt$test_set_path, compress = "gzip")
 
       cleanup_extracted_csvs(opt$data_dir)
-
-      if (!opt$keep_raw_zip && file.exists(opt$zip_path)) {
-        if (file.remove(opt$zip_path)) {
-          safe_info(sprintf("Raw archive removed to keep the pipeline lightweight: %s.", opt$zip_path))
-        } else {
-          safe_warn(sprintf("Could not remove raw archive: %s.", opt$zip_path))
-        }
-      }
+      cleanup_raw_zip(opt$zip_path, keep_raw_zip = opt$keep_raw_zip)
 
       safe_info(sprintf(
         "Feature store build completed successfully. train rows = %d, test rows = %d, train cols = %d, test cols = %d.",

@@ -5,7 +5,7 @@
 # Usage:
 #   bash entrypoint.sh train     - train the model and save model_v1.rds
 #   bash entrypoint.sh serve     - start the Plumber API (default)
-#   bash entrypoint.sh generate  - (re)generate data/sample_credit_data.csv
+#   bash entrypoint.sh generate  - (re)generate mock raw zip + demo CSV (not used by train.R directly)
 #   bash entrypoint.sh modelling - build the Parquet feature store from raw CSVs
 #   bash entrypoint.sh test      - run integration tests against a live API
 # ------------------------------------------------------------------------------

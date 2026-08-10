@@ -1,7 +1,7 @@
 {
   "model_version": "v1.0.0",
   "schema_version": "1.0.0",
-  "generated_at": "2026-08-09T16:42:48Z",
+  "generated_at": "2026-08-10T12:35:40Z",
   "total_features": 7,
   "target": {
     "name": "TARGET",
@@ -28,7 +28,7 @@
       "name": "AMT_ANNUITY",
       "type": "numeric",
       "required": true,
-      "imputed_default": 24903
+      "imputed_default": {}
     },
     {
       "name": "DAYS_BIRTH",
@@ -46,13 +46,13 @@
       "name": "THIRD_PARTY_CREDIT_SCORE_2",
       "type": "numeric",
       "required": true,
-      "imputed_default": 0.566
+      "imputed_default": {}
     },
     {
       "name": "THIRD_PARTY_CREDIT_SCORE_3",
       "type": "numeric",
       "required": true,
-      "imputed_default": 0.5353
+      "imputed_default": {}
     }
   ]
 }

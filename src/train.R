@@ -4,9 +4,13 @@
 #
 # Isolated, reproducible training of the Agibank credit risk model.
 #
+# Upstream input is the RDS feature store produced by src/data_modelling.R
+# (Home Credit .zip CSV tables -> aggregated feature_store.rds). This script
+# does NOT consume data/sample_credit_data.csv from generate_sample_data.R.
+#
 # Pipeline:
 #   1. Resolve CLI configuration / environment variables
-#   2. Load RDS feature store (data/feature_store.rds)
+#   2. Load RDS feature store (data/feature_store.rds, built by data_modelling.R)
 #   3. Load the authoritative feature schema (src/features/metadata.json)
 #   4. Extract target and predictor features (excluding SK_ID_CURR & is_train)
 #   5. Impute missing values (median for numeric, mode for categorical)

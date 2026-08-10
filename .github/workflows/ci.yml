@@ -91,27 +91,27 @@ jobs:
       - name: Build Docker image
         run: docker build -t "${{ env.IMAGE_NAME }}:test" .
 
-      - name: Generate mock training data
+      - name: Generate mock raw Home Credit archive
         run: |
           mkdir -p data models
           docker run --rm \
             -v "$PWD/data:/app/data" \
             -e SAMPLE_DATA_PATH=data/sample_credit_data.csv \
-            -e FEATURE_STORE_PATH=data/feature_store.rds \
+            -e RAW_DATA_ZIP=data/home-credit-default-risk.zip \
             "${{ env.IMAGE_NAME }}:test" generate --force
 
-      - name: Verify mock data artifacts exist
+      - name: Verify mock raw data artifacts exist
         run: |
           test -s data/sample_credit_data.csv || {
             echo "::error::data/sample_credit_data.csv is missing or empty"
             exit 1
           }
-          test -s data/feature_store.rds || {
-            echo "::error::data/feature_store.rds is missing or empty"
+          test -s data/home-credit-default-risk.zip || {
+            echo "::error::data/home-credit-default-risk.zip is missing or empty"
             exit 1
           }
           echo "sample_credit_data.csv OK ($(stat -c%s data/sample_credit_data.csv) bytes)"
-          echo "feature_store.rds OK ($(stat -c%s data/feature_store.rds) bytes)"
+          echo "home-credit-default-risk.zip OK ($(stat -c%s data/home-credit-default-risk.zip) bytes)"
 
       - name: Run model training inside the container
         run: |
@@ -119,7 +119,16 @@ jobs:
             -v "$PWD/models:/app/models" \
             -v "$PWD/data:/app/data" \
             -e DATA_PATH=data/feature_store.rds \
+            -e RAW_DATA_ZIP=data/home-credit-default-risk.zip \
             "${{ env.IMAGE_NAME }}:test" train
+
+      - name: Verify feature store and model artifacts exist
+        run: |
+          test -s data/feature_store.rds || {
+            echo "::error::data/feature_store.rds is missing or empty"
+            exit 1
+          }
+          echo "feature_store.rds OK ($(stat -c%s data/feature_store.rds) bytes)"
 
       - name: Verify model artifact exists and is non-empty
         run: |
@@ -140,13 +149,13 @@ jobs:
       - name: Build Docker image
         run: docker build -t "${{ env.IMAGE_NAME }}:test" .
 
-      - name: Generate mock training data
+      - name: Generate mock raw Home Credit archive
         run: |
           mkdir -p data models
           docker run --rm \
             -v "$PWD/data:/app/data" \
             -e SAMPLE_DATA_PATH=data/sample_credit_data.csv \
-            -e FEATURE_STORE_PATH=data/feature_store.rds \
+            -e RAW_DATA_ZIP=data/home-credit-default-risk.zip \
             "${{ env.IMAGE_NAME }}:test" generate --force
 
       - name: Train the model (required by the API container)
@@ -155,6 +164,7 @@ jobs:
             -v "$PWD/models:/app/models" \
             -v "$PWD/data:/app/data" \
             -e DATA_PATH=data/feature_store.rds \
+            -e RAW_DATA_ZIP=data/home-credit-default-risk.zip \
             "${{ env.IMAGE_NAME }}:test" train
 
       - name: Start API container in background
