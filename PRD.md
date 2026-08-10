@@ -25,34 +25,51 @@ This PRD serves as the authoritative specification for building and maintaining 
 
 ---
 
-## 2. Directory Structure Specification
-
+## 2. Project Structure
 ```text
-agibank-mlops-challenge/
-├── .github/
-│   └── workflows/
-│       └── ci.yml                 # GitHub Actions CI/CD Pipeline
-├── src/
-│   ├── data_modelling.R           # Unzips, aggregates 1:N tables, generates feature_store.rds & cleans CSVs
-│   ├── train.R                    # Consumes feature_store.rds, trains model, writes model_v1.rds & features_metadata.json
-│   └── generate_sample_data.R     # Generates fallback sample dataset if zip/CSVs are absent
-├── api/
-│   ├── plumber.R                  # Plumber REST API endpoints & input validation
-│   └── start_api.R                # Entrypoint runner script for Plumber API
-├── models/
-│   └── model_v1.rds               # Trained model artifact (S3 class object with embedded metadata)
-├── data/
-│   ├── feature_store.rds          # Consolidated feature store (RDS format)
-│   └── features_metadata.json     # Dynamically generated feature schema and imputation rules
-├── tests/
-│   └── test_api.R                 # API integration test suite
-├── Dockerfile                     # Multi-purpose Docker image build specification
-├── docker-compose.yml             # Service orchestration for pipeline and API
-├── entrypoint.sh                  # Operational modes switcher (train vs serve)
-├── .gitignore                     # Git tracking exclusion rules
-├── requirements.R                 # R package dependencies installer script
-└── README.md                      # Comprehensive project documentation
-
+credit-risk-mlops-pipeline/
+│
+├── .github/workflows/       # GitHub Actions CI/CD workflows
+│   └── ci.yml
+│
+├── api/                     # API implementation
+│   ├── plumber.R
+│   └── start_api.R
+│
+├── data/                    # Datasets and feature store
+│   ├── feature_store.rds
+│   ├── features_metadata.json
+│   ├── home-credit-default-risk.zip
+│   └── test_set.rds
+│
+├── docs/                    # Project documentation
+│   ├── ci/
+│   └── swagger/
+│
+├── models/                  # Trained models and evaluation results
+│   ├── .gitkeep
+│   ├── model_v1.rds
+│   └── performance_result.json
+│
+├── src/                     # Source code for the ML pipeline
+│   ├── features/
+│   │   └── metadata.json
+│   ├── data_inspection.ipynb
+│   ├── data_modelling.R
+│   ├── generate_sample_data.R
+│   └── train.R
+│
+├── tests/                   # Automated tests
+│   └── test_api.R
+│
+├── .dockerignore            # Docker ignore rules
+├── .gitignore               # Git ignore rules
+├── docker-compose.yml       # Docker Compose configuration
+├── Dockerfile               # Docker image configuration
+├── entrypoint.sh            # Container entrypoint script
+├── PRD.md                   # Project Requirements Document
+├── README.md                # Project documentation
+└── requirements.R           # R package dependencies
 ```
 
 ---

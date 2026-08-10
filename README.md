@@ -68,29 +68,48 @@ flowchart LR
 ## 2. Repository Structure
 
 ```text
-credit-risk-mlops-challenge/
+credit_risk_mlops_pipeline/
 ├── .github/workflows/
-│   └── ci.yml                 # CI/CD pipeline (lint, build, test, tag)
-├── src/
-│   ├── train.R                # Isolated training script (env-var driven)
-│   └── features/
-│       └── metadata.json      # Versioned feature schema (schema 1.0.0)
+│   └── ci.yml                     # CI/CD pipeline (lint, build, train, test, tag)
 ├── api/
-│   ├── plumber.R              # Plumber API: endpoints, validation, logging
-│   └── start_api.R            # API entrypoint (host 0.0.0.0, configurable port)
-├── models/
-│   └── .gitkeep               # Trained artifacts land here (gitignored)
-├── data/
-│   └── sample_credit_data.csv # Sample dataset (auto-generated, seeded)
+│   ├── plumber.R                  # Plumber API: endpoints, validation, logging
+│   └── start_api.R                # API entrypoint (host 0.0.0.0, configurable port)
+├── data/                          # Runtime data (CSV/RDS/ZIP gitignored)
+│   ├── home-credit-default-risk.zip   # Raw Home Credit archive (local / CI mock)
+│   ├── feature_store.rds          # Training feature store (built by data_modelling.R)
+│   ├── test_set.rds               # Hold-out test partition (built by data_modelling.R)
+│   ├── features_metadata.json     # Feature schema exported at train time (committed)
+│   └── sample_credit_data.csv     # Standalone demo CSV (generate_sample_data.R)
+├── docs/
+│   └── ci/                        # CI pipeline screenshots
+├── models/                        # Trained artifacts (gitignored except .gitkeep)
+│   ├── .gitkeep                   # Keeps directory in version control
+│   ├── model_v1.rds               # Serialized Random Forest + metadata
+│   └── performance_result.json    # CV / test metrics from training
+├── src/
+│   ├── data_modelling.R           # Unzip raw CSVs, aggregate features, build RDS store
+│   ├── generate_sample_data.R     # Mock Home Credit zip + demo CSV for CI / local runs
+│   ├── train.R                    # Train ranger model from feature_store.rds
+│   ├── data_inspection.ipynb      # Exploratory data analysis notebook
+│   └── features/
+│       └── metadata.json          # Versioned feature schema (schema 1.0.0)
 ├── tests/
-│   └── test_api.R             # testthat integration test suite
-├── Dockerfile                 # rocker/r-ver:4.3.2 based image
-├── docker-compose.yml         # train + api orchestration
-├── entrypoint.sh              # train | serve | generate | test modes
-├── requirements.R             # Idempotent R package installer
+│   └── test_api.R                 # testthat integration test suite
+├── Dockerfile                     # rocker/r-ver:4.3.2 based image
+├── docker-compose.yml             # train + api orchestration
+├── entrypoint.sh                  # train | serve | generate | modelling | test
+├── requirements.R                 # Idempotent R package installer
+├── PRD.md                         # Product requirements document
+├── desafio.md                     # Original challenge brief (Portuguese)
 ├── .dockerignore
 └── .gitignore
 ```
+
+**Pipeline data flow:** place (or generate) `data/home-credit-default-risk.zip` →
+`src/data_modelling.R` builds `data/feature_store.rds` + `data/test_set.rds` →
+`src/train.R` consumes the feature store and writes `models/model_v1.rds`.
+For CI and smoke tests, `src/generate_sample_data.R` produces a mock zip; it does
+**not** feed training directly.
 
 ---
 
@@ -161,9 +180,11 @@ curl -sf http://localhost:8080/health
 
 Access the Plumber Swagger/OpenAPI docs on <http://localhost:8080/__docs__/>
 
+![SwaggerUI](docs/swagger/swagger_ui.png)
+
 ### 4.5 Docker Compose (one-liner)
 
-Useful to start both train and api at once:
+Run the following command if you want to start train and api at once:
 
 ```bash
 # Train first, then start the API
